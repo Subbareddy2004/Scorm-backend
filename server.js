@@ -6,8 +6,8 @@ const cors = require('cors');
 
 const app = express();
 app.use(cors({
-    origin: '*', // Allow all origins
-    methods: ['GET', 'POST', 'DELETE'], // Add DELETE method
+    origin: 'https://scorm-frontend.vercel.app', // Replace with your frontend URL
+    methods: ['GET', 'POST', 'DELETE'],
     allowedHeaders: ['Content-Type'],
   }));
 app.use(express.static('public')); // Serve static files from 'public' directory
@@ -41,12 +41,12 @@ app.post('/upload', (req, res) => {
 });
 
 app.get('/folders', (req, res) => {
-  const publicPath = path.join(__dirname, 'public');
-  fs.readdir(publicPath, { withFileTypes: true }, (err, entries) => {
-    if (err) {
-      console.error('Error reading public directory:', err);
-      return res.status(500).json({ error: 'Server error' });
-    }
+    const publicPath = path.join(__dirname, 'public');
+    fs.readdir(publicPath, { withFileTypes: true }, (err, entries) => {
+      if (err) {
+        console.error('Error reading public directory:', err);
+        return res.status(500).json({ error: 'Server error', details: err.message });
+      }
     const folders = entries
       .filter(entry => entry.isDirectory())
       .map(folder => ({
