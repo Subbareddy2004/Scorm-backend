@@ -1,36 +1,41 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs-extra');
 const cors = require('cors');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+require('dotenv').config();
 
 const app = express();
-app.use(cors({
-    origin: 'https://scorm-frontend.vercel.app', // Replace with your frontend URL
-    methods: ['GET', 'POST', 'DELETE'],
-    allowedHeaders: ['Content-Type'],
-  }));
-app.use(express.static('public')); // Serve static files from 'public' directory
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const folderName = req.body.folderName;
-    const relativePath = file.fieldname.split('/');
-    relativePath.shift(); // Remove the first element (which is 'files')
-    relativePath.pop(); // Remove the last element (file name)
-    const fullPath = path.join(__dirname, 'public', ...relativePath);
-    fs.mkdirpSync(fullPath);
-    cb(null, fullPath);
-  },
-  filename: function (req, file, cb) {
-    cb(null, file.originalname);
-  }
+// CORS configuration
+app.use(cors({
+  origin: 'https://scorm-frontend.vercel.app', // Replace with your frontend URL
+  methods: ['GET', 'POST', 'DELETE'],
+  allowedHeaders: ['Content-Type'],
+  credentials: true
+}));
+
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-const upload = multer({ storage: storage }).any();
+// Cloudinary storage configuration
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'scorm_files',
+    resource_type: 'auto'
+  },
+});
 
+const upload = multer({ storage: storage }).array('files', 100); // Adjust the number based on your needs
+
+// Upload endpoint
 app.post('/upload', (req, res) => {
-  upload(req, res, function (err) {
+  upload(req, res, function(err) {
     if (err) {
       console.error('Upload error:', err);
       return res.status(500).json({ error: 'Upload error', details: err.message });
@@ -40,36 +45,35 @@ app.post('/upload', (req, res) => {
   });
 });
 
-app.get('/folders', (req, res) => {
-    const publicPath = path.join(__dirname, 'public');
-    fs.readdir(publicPath, { withFileTypes: true }, (err, entries) => {
-      if (err) {
-        console.error('Error reading public directory:', err);
-        return res.status(500).json({ error: 'Server error', details: err.message });
-      }
-    const folders = entries
-      .filter(entry => entry.isDirectory())
-      .map(folder => ({
-        name: folder.name,
-        link: `/${folder.name}/index.html`
-      }));
+// Get folders endpoint
+app.get('/folders', async (req, res) => {
+  try {
+    const result = await cloudinary.api.resources({
+      type: 'upload',
+      prefix: 'scorm_files/',
+      max_results: 500
+    });
+    const folders = result.resources.map(resource => ({
+      name: resource.public_id.split('/').pop(),
+      link: resource.secure_url
+    }));
     res.json(folders);
-  });
+  } catch (error) {
+    console.error('Error fetching folders:', error);
+    res.status(500).json({ error: 'Server error', details: error.message });
+  }
 });
 
-// Add this new endpoint for deleting folders
-app.delete('/folders/:folderName', (req, res) => {
+// Delete folder endpoint
+app.delete('/folders/:folderName', async (req, res) => {
   const folderName = req.params.folderName;
-  const folderPath = path.join(__dirname, 'public', folderName);
-
-  fs.remove(folderPath, (err) => {
-    if (err) {
-      console.error('Error deleting folder:', err);
-      return res.status(500).json({ error: 'Error deleting folder', details: err.message });
-    }
-    console.log(`Folder "${folderName}" deleted successfully`);
+  try {
+    const result = await cloudinary.api.delete_resources_by_prefix(`scorm_files/${folderName}`);
     res.status(200).json({ message: `Folder "${folderName}" deleted successfully` });
-  });
+  } catch (error) {
+    console.error('Error deleting folder:', error);
+    res.status(500).json({ error: 'Error deleting folder', details: error.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
