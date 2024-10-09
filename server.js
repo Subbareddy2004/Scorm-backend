@@ -64,11 +64,13 @@ app.post('/upload', (req, res) => {
 // Get folders endpoint
 app.get('/folders', async (req, res) => {
   try {
+    console.log('Fetching folders from Cloudinary...');
     const result = await cloudinary.api.resources({
       type: 'upload',
       prefix: 'scorm_files/',
       max_results: 500
     });
+    console.log('Cloudinary response:', result);
     const folders = result.resources.map(resource => ({
       name: resource.public_id.split('/').pop(),
       link: resource.secure_url
@@ -99,11 +101,12 @@ app.listen(PORT, () => {
 
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
 
-app.post('/upload-chunk', (req, res) => {
-  const { chunkIndex, totalChunks } = req.body;
-  const chunk = req.files.file;
-  const fileName = chunk.name;
+const upload = multer({ dest: 'uploads/' });
+
+app.post('/upload-chunk', upload.single('file'), (req, res) => {
+  const { chunkIndex, totalChunks, fileName } = req.body;
   const tempDir = path.join(__dirname, 'temp');
   
   if (!fs.existsSync(tempDir)) {
@@ -116,7 +119,7 @@ app.post('/upload-chunk', (req, res) => {
   }
   
   const chunkPath = path.join(chunkDir, `chunk-${chunkIndex}`);
-  fs.writeFileSync(chunkPath, chunk.data);
+  fs.renameSync(req.file.path, chunkPath);
   
   res.status(200).json({ message: 'Chunk uploaded successfully' });
 });
