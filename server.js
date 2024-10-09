@@ -7,13 +7,20 @@ require('dotenv').config();
 
 const app = express();
 
+// Increase JSON and URL-encoded payload limits
+app.use(express.json({ limit: '150mb' }));
+app.use(express.urlencoded({ limit: '150mb', extended: true }));
+
 // CORS configuration
 app.use(cors({
   origin: 'https://scorm-frontend.vercel.app', // Replace with your frontend URL
-  methods: ['GET', 'POST', 'DELETE'],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type'],
   credentials: true
 }));
+
+// Add this line before your routes
+app.options('*', cors());
 
 // Cloudinary configuration
 cloudinary.config({
@@ -31,12 +38,21 @@ const storage = new CloudinaryStorage({
   },
 });
 
-const upload = multer({ storage: storage }).array('files', 100); // Adjust the number based on your needs
+// Adjust multer configuration
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 150 * 1024 * 1024 } // 150MB limit
+}).array('files', 100);
 
 // Upload endpoint
 app.post('/upload', (req, res) => {
   upload(req, res, function(err) {
-    if (err) {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'File too large', details: 'Max file size is 150MB' });
+      }
+      return res.status(500).json({ error: 'Upload error', details: err.message });
+    } else if (err) {
       console.error('Upload error:', err);
       return res.status(500).json({ error: 'Upload error', details: err.message });
     }
@@ -60,7 +76,7 @@ app.get('/folders', async (req, res) => {
     res.json(folders);
   } catch (error) {
     console.error('Error fetching folders:', error);
-    res.status(500).json({ error: 'Server error', details: error.message });
+    res.status(500).json({ error: 'Server error', details: error.message, stack: error.stack });
   }
 });
 
@@ -79,4 +95,63 @@ app.delete('/folders/:folderName', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+});
+
+const fs = require('fs');
+const path = require('path');
+
+app.post('/upload-chunk', (req, res) => {
+  const { chunkIndex, totalChunks } = req.body;
+  const chunk = req.files.file;
+  const fileName = chunk.name;
+  const tempDir = path.join(__dirname, 'temp');
+  
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir);
+  }
+  
+  const chunkDir = path.join(tempDir, fileName);
+  if (!fs.existsSync(chunkDir)) {
+    fs.mkdirSync(chunkDir);
+  }
+  
+  const chunkPath = path.join(chunkDir, `chunk-${chunkIndex}`);
+  fs.writeFileSync(chunkPath, chunk.data);
+  
+  res.status(200).json({ message: 'Chunk uploaded successfully' });
+});
+
+app.post('/complete-upload', async (req, res) => {
+  const { fileName } = req.body;
+  const chunkDir = path.join(__dirname, 'temp', fileName);
+  const outputPath = path.join(__dirname, 'uploads', fileName);
+  
+  const chunkFiles = fs.readdirSync(chunkDir).sort((a, b) => {
+    return parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]);
+  });
+  
+  const writeStream = fs.createWriteStream(outputPath);
+  
+  for (let chunkFile of chunkFiles) {
+    const chunkPath = path.join(chunkDir, chunkFile);
+    const chunkBuffer = fs.readFileSync(chunkPath);
+    writeStream.write(chunkBuffer);
+    fs.unlinkSync(chunkPath);
+  }
+  
+  writeStream.end();
+  fs.rmdirSync(chunkDir);
+  
+  // Upload the complete file to Cloudinary
+  try {
+    const result = await cloudinary.uploader.upload(outputPath, {
+      folder: 'scorm_files',
+      resource_type: 'auto'
+    });
+    fs.unlinkSync(outputPath);
+    res.status(200).json({ message: 'File uploaded successfully', url: result.secure_url });
+  } catch (error) {
+    console.error('Error uploading to Cloudinary:', error);
+    res.status(500).json({ error: 'Upload to Cloudinary failed' });
+  }
 });
